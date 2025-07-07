@@ -34,37 +34,27 @@ if ($existing_count > 0) {
     exit();
 }
 
-// First, let's verify the section exists and get its details
-$stmt = mysqli_prepare($conn, "SELECT cs.*, p.programme_name, p.programme_code 
+// Get section and subject information
+$stmt = mysqli_prepare($conn, "SELECT cs.*, p.programme_name, p.programme_code, 
+                              s.subject_name, s.subject_code
                               FROM class_section cs 
                               JOIN programme p ON cs.programme_id = p.programme_id 
+                              JOIN subjects s ON s.subject_id = ?
                               WHERE cs.section_id = ?");
-mysqli_stmt_bind_param($stmt, "i", $section_id);
+mysqli_stmt_bind_param($stmt, "ii", $subject_id, $section_id);
 mysqli_stmt_execute($stmt);
-$section_result = mysqli_stmt_get_result($stmt);
-$section_info = mysqli_fetch_assoc($section_result);
+$info_result = mysqli_stmt_get_result($stmt);
+$section_info = mysqli_fetch_assoc($info_result);
 
 if (!$section_info) {
-    echo '<div class="alert alert-danger">Selected section not found.</div>';
+    echo '<div class="alert alert-danger">Section or subject not found.</div>';
     mysqli_stmt_close($stmt);
     exit();
 }
 
-// Get subject details
-$stmt = mysqli_prepare($conn, "SELECT * FROM subjects WHERE subject_id = ?");
-mysqli_stmt_bind_param($stmt, "i", $subject_id);
-mysqli_stmt_execute($stmt);
-$subject_result = mysqli_stmt_get_result($stmt);
-$subject_info = mysqli_fetch_assoc($subject_result);
-
-if (!$subject_info) {
-    echo '<div class="alert alert-danger">Selected subject not found.</div>';
-    mysqli_stmt_close($stmt);
-    exit();
-}
-
-// Now get students in the section
-$stmt = mysqli_prepare($conn, "SELECT s.*, p.programme_code 
+// Get students in the section
+$stmt = mysqli_prepare($conn, "SELECT s.student_id, s.admission_number, s.roll_number, 
+                              s.first_name, s.last_name, p.programme_code 
                               FROM students s 
                               JOIN class_section cs ON s.section_id = cs.section_id
                               JOIN programme p ON cs.programme_id = p.programme_id
@@ -73,8 +63,6 @@ $stmt = mysqli_prepare($conn, "SELECT s.*, p.programme_code
 mysqli_stmt_bind_param($stmt, "i", $section_id);
 mysqli_stmt_execute($stmt);
 $students = mysqli_stmt_get_result($stmt);
-
-// Debug information
 $student_count = mysqli_num_rows($students);
 
 if ($student_count === 0) {
@@ -82,33 +70,15 @@ if ($student_count === 0) {
             <i class="fas fa-info-circle"></i>
             <strong>No Students Found!</strong>
             <br><br>
-            <strong>Debug Information:</strong>
-            <ul class="mb-0 mt-2">
-                <li><strong>Section:</strong> ' . htmlspecialchars($section_info['programme_name']) . ' - Section ' . htmlspecialchars($section_info['section_name']) . '</li>
-                <li><strong>Subject:</strong> ' . htmlspecialchars($subject_info['subject_code']) . ' - ' . htmlspecialchars($subject_info['subject_name']) . '</li>
-                <li><strong>Section ID:</strong> ' . $section_id . '</li>
-                <li><strong>Subject ID:</strong> ' . $subject_id . '</li>
-            </ul>
-            <br>
-            <strong>Possible Reasons:</strong>
-            <ul class="mb-0">
-                <li>No active students are enrolled in this section</li>
-                <li>Students may be assigned to a different section</li>
-                <li>The section-subject combination may not be properly configured</li>
-            </ul>
-            <br>
-            <div class="mt-3">
-                <button type="button" class="btn btn-info btn-sm" onclick="showStudentDebugInfo(' . $section_id . ')">
-                    <i class="fas fa-search"></i> Debug: Show All Students in System
-                </button>
-            </div>
+            No active students are enrolled in this section.
           </div>';
     mysqli_stmt_close($stmt);
     exit();
 }
 ?>
 
-<form method="POST" action="debug_attendance.php" id="attendance_mark_form" target="_blank">
+<!-- Fixed form submission to attendance.php instead of debug -->
+<form method="POST" action="dashboard.php?page=attendance" id="attendance_mark_form">
     <input type="hidden" name="action" value="mark_attendance">
     <input type="hidden" name="subject_id" value="<?php echo $subject_id; ?>">
     <input type="hidden" name="section_id" value="<?php echo $section_id; ?>">
@@ -122,8 +92,8 @@ if ($student_count === 0) {
                     <div class="row">
                         <div class="col-md-3">
                             <strong>Subject:</strong><br>
-                            <span class="badge bg-primary"><?php echo htmlspecialchars($subject_info['subject_code']); ?></span>
-                            <?php echo htmlspecialchars($subject_info['subject_name']); ?>
+                            <span class="badge bg-primary"><?php echo htmlspecialchars($section_info['subject_code']); ?></span>
+                            <?php echo htmlspecialchars($section_info['subject_name']); ?>
                         </div>
                         <div class="col-md-3">
                             <strong>Section:</strong><br>
@@ -166,9 +136,6 @@ if ($student_count === 0) {
                 <div class="btn-group me-2">
                     <input type="text" class="form-control form-control-sm" id="student_search" 
                            placeholder="Search students..." onkeyup="searchStudents()" style="width: 200px;">
-                </div>
-                <div class="btn-group">
-                    <span id="auto_save_indicator" class="text-muted small"></span>
                 </div>
             </div>
         </div>
@@ -252,7 +219,7 @@ if ($student_count === 0) {
                             </label>
                             
                             <input type="radio" class="btn-check" name="attendance[<?php echo $student['student_id']; ?>]" 
-                                   id="absent_<?php echo $student['student_id']; ?>" value="absent" autocomplete="off" checked>
+                                   id="absent_<?php echo $student['student_id']; ?>" value="absent" autocomplete="off">
                             <label class="btn btn-outline-danger btn-sm" for="absent_<?php echo $student['student_id']; ?>">
                                 <i class="fas fa-times"></i> Absent
                             </label>
@@ -281,15 +248,15 @@ if ($student_count === 0) {
             <div class="alert alert-info">
                 <i class="fas fa-info-circle"></i>
                 <strong>Instructions:</strong> 
-                Mark attendance for each student. Default status is "Absent". 
+                Select attendance status for each student. Students with no selection will be marked as absent.
                 Use keyboard shortcuts: Ctrl+A (Mark All Present), Ctrl+D (Mark All Absent), Ctrl+S (Submit).
             </div>
             
-            <button type="button" class="btn btn-primary btn-lg me-2" onclick="submitAttendance()">
+            <button type="submit" class="btn btn-primary btn-lg me-2">
                 <i class="fas fa-save"></i> Submit Attendance (<?php echo $student_count; ?> Students)
             </button>
-            <button type="button" class="btn btn-secondary btn-lg" onclick="printAttendanceSheet()">
-                <i class="fas fa-print"></i> Print Sheet
+            <button type="button" class="btn btn-secondary btn-lg" onclick="window.location.reload();">
+                <i class="fas fa-redo"></i> Reset Form
             </button>
         </div>
     </div>
@@ -297,37 +264,111 @@ if ($student_count === 0) {
 
 <script>
 // Initialize stats on load
-updateAttendanceStats();
+document.addEventListener('DOMContentLoaded', function() {
+    updateAttendanceStats();
+    
+    // Add change listeners to attendance inputs for real-time stats
+    document.addEventListener('change', function(e) {
+        if (e.target.name && e.target.name.startsWith('attendance[')) {
+            updateAttendanceStats();
+        }
+    });
+});
 
-// Debug function to show all students
-function showStudentDebugInfo(sectionId) {
-    fetch('debug_students.php?section_id=' + sectionId)
-        .then(response => response.text())
-        .then(data => {
-            const debugModal = document.createElement('div');
-            debugModal.innerHTML = `
-                <div class="modal fade" id="debugModal" tabindex="-1">
-                    <div class="modal-dialog modal-xl">
-                        <div class="modal-content">
-                            <div class="modal-header">
-                                <h5 class="modal-title">Debug: Student Information</h5>
-                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                            </div>
-                            <div class="modal-body">
-                                ${data}
-                            </div>
-                            <div class="modal-footer">
-                                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-            document.body.appendChild(debugModal);
-            const modal = new bootstrap.Modal(document.getElementById('debugModal'));
-            modal.show();
-        });
+// Mark all students as present
+function markAllPresent() {
+    const radioButtons = document.querySelectorAll('input[name^="attendance"][value="present"]');
+    radioButtons.forEach(radio => {
+        radio.checked = true;
+    });
 }
+
+// Mark all students as absent
+function markAllAbsent() {
+    const radioButtons = document.querySelectorAll('input[name^="attendance"][value="absent"]');
+    radioButtons.forEach(radio => {
+        radio.checked = true;
+    });
+}
+
+// Update attendance statistics
+function updateAttendanceStats() {
+    const presentCount = document.querySelectorAll('input[name^="attendance"][value="present"]:checked').length;
+    const absentCount = document.querySelectorAll('input[name^="attendance"][value="absent"]:checked').length;
+    const lateCount = document.querySelectorAll('input[name^="attendance"][value="late"]:checked').length;
+    const totalStudents = document.querySelectorAll('.student-row').length;
+    
+    const statsContainer = document.getElementById('attendance_stats');
+    if (statsContainer) {
+        const percentage = totalStudents > 0 ? Math.round(((presentCount + lateCount) / totalStudents) * 100) : 0;
+        
+        // Update the stats cards
+        const cards = statsContainer.querySelectorAll('.card h5');
+        if (cards.length >= 4) {
+            cards[0].textContent = presentCount;  // Present
+            cards[1].textContent = absentCount;   // Absent
+            cards[2].textContent = lateCount;     // Late
+            cards[3].textContent = percentage + '%'; // Percentage
+        }
+    }
+}
+
+// Search students in attendance list
+function searchStudents() {
+    const searchTerm = document.getElementById('student_search').value.toLowerCase();
+    const studentRows = document.querySelectorAll('.student-row');
+    
+    studentRows.forEach(row => {
+        const studentName = row.querySelector('.student-name').textContent.toLowerCase();
+        const admissionNo = row.querySelector('.admission-no').textContent.toLowerCase();
+        const rollNo = row.querySelector('.roll-no').textContent.toLowerCase();
+        
+        if (studentName.includes(searchTerm) || admissionNo.includes(searchTerm) || rollNo.includes(searchTerm)) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    });
+}
+
+// Form validation before submission
+document.getElementById('attendance_mark_form').addEventListener('submit', function(e) {
+    const checkedInputs = this.querySelectorAll('input[name^="attendance"]:checked');
+    
+    if (checkedInputs.length === 0) {
+        e.preventDefault();
+        alert('Please mark attendance for at least one student before submitting.');
+        return false;
+    }
+    
+    // Show confirmation for partial attendance
+    const totalStudents = this.querySelectorAll('.student-row').length;
+    if (checkedInputs.length < totalStudents) {
+        const unmarkedCount = totalStudents - checkedInputs.length;
+        if (!confirm(`${unmarkedCount} students have no attendance marked. They will be marked as absent. Continue?`)) {
+            e.preventDefault();
+            return false;
+        }
+    }
+    
+    return true;
+});
+
+// Keyboard shortcuts
+document.addEventListener('keydown', function(e) {
+    if (e.ctrlKey && e.key === 'a') {
+        e.preventDefault();
+        markAllPresent();
+        updateAttendanceStats();
+    } else if (e.ctrlKey && e.key === 'd') {
+        e.preventDefault();
+        markAllAbsent();
+        updateAttendanceStats();
+    } else if (e.ctrlKey && e.key === 's') {
+        e.preventDefault();
+        document.getElementById('attendance_mark_form').submit();
+    }
+});
 </script>
 
 <?php

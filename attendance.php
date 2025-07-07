@@ -1,4 +1,5 @@
 <?php
+// Fixed attendance.php - Attendance marking section
 global $conn;
 
 $message = '';
@@ -33,81 +34,142 @@ if ($user_type == 'faculty') {
 if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['action']) && in_array($user_type, ['admin', 'hod', 'faculty'])) {
     switch ($_POST['action']) {
         case 'mark_attendance':
-            $subject_id = validateInput($_POST['subject_id']);
-            $section_id = validateInput($_POST['section_id']);
+            $subject_id = (int)validateInput($_POST['subject_id']);
+            $section_id = (int)validateInput($_POST['section_id']);
             $attendance_date = validateInput($_POST['attendance_date']);
-            $period_number = validateInput($_POST['period_number']);
-            $faculty_id = $user_type == 'faculty' ? $current_faculty_id : validateInput($_POST['faculty_id']);
+            $period_number = (int)validateInput($_POST['period_number']);
+            $faculty_id = $user_type == 'faculty' ? $current_faculty_id : (int)validateInput($_POST['faculty_id']);
             
+            // Validate and format date
+            if (!empty($attendance_date)) {
+                $date_obj = DateTime::createFromFormat('Y-m-d', $attendance_date);
+                if (!$date_obj || $date_obj->format('Y-m-d') !== $attendance_date) {
+                    $error = "Invalid date format. Please use YYYY-MM-DD format.";
+                    break;
+                }
+                // Ensure date is not in the future
+                $today = new DateTime();
+                if ($date_obj > $today) {
+                    $error = "Cannot mark attendance for future dates.";
+                    break;
+                }
+            }
+            
+            // Validate inputs
             if (empty($subject_id) || empty($section_id) || empty($attendance_date) || empty($period_number)) {
                 $error = "Please fill in all required fields.";
-            } else {
-                // Check if attendance already marked for this date and period
-                $stmt = mysqli_prepare($conn, "SELECT COUNT(*) as count FROM attendance WHERE subject_id = ? AND attendance_date = ? AND period_number = ?");
-                mysqli_stmt_bind_param($stmt, "isi", $subject_id, $attendance_date, $period_number);
-                mysqli_stmt_execute($stmt);
-                $result = mysqli_stmt_get_result($stmt);
-                $existing_count = mysqli_fetch_assoc($result)['count'];
-                
-                if ($existing_count > 0) {
-                    $error = "Attendance already marked for this subject, date, and period!";
-                } else {
-                    // Get students in the section - FIXED: More detailed query
-                    $stmt = mysqli_prepare($conn, "SELECT student_id, first_name, last_name FROM students WHERE section_id = ? AND student_status = 'active'");
-                    mysqli_stmt_bind_param($stmt, "i", $section_id);
-                    mysqli_stmt_execute($stmt);
-                    $students_result = mysqli_stmt_get_result($stmt);
-                    
-                    $marked_count = 0;
-                    $present_count = 0;
-                    $absent_count = 0;
-                    $late_count = 0;
-                    
-                    // Debug: Check if we have attendance data in POST
-                    $attendance_data = isset($_POST['attendance']) ? $_POST['attendance'] : array();
-                    
-                    if (empty($attendance_data)) {
-                        $error = "No attendance data received. Please mark attendance for students and try again.";
-                    } else {
-                        // Process each student's attendance from the form
-                        foreach ($attendance_data as $student_id => $status) {
-                            $student_id = (int)$student_id;
-                            $status = validateInput($status);
-                            $remarks = isset($_POST['remarks'][$student_id]) ? validateInput($_POST['remarks'][$student_id]) : '';
-                            
-                            // Verify student exists and belongs to the section
-                            $verify_stmt = mysqli_prepare($conn, "SELECT student_id FROM students WHERE student_id = ? AND section_id = ? AND student_status = 'active'");
-                            mysqli_stmt_bind_param($verify_stmt, "ii", $student_id, $section_id);
-                            mysqli_stmt_execute($verify_stmt);
-                            $verify_result = mysqli_stmt_get_result($verify_stmt);
-                            
-                            if (mysqli_num_rows($verify_result) > 0) {
-                                $stmt_insert = mysqli_prepare($conn, "INSERT INTO attendance (student_id, subject_id, faculty_id, attendance_date, period_number, status, remarks) VALUES (?, ?, ?, ?, ?, ?, ?)");
-                                mysqli_stmt_bind_param($stmt_insert, "iiiisss", $student_id, $subject_id, $faculty_id, $attendance_date, $period_number, $status, $remarks);
-                                
-                                if (mysqli_stmt_execute($stmt_insert)) {
-                                    $marked_count++;
-                                    switch($status) {
-                                        case 'present': $present_count++; break;
-                                        case 'absent': $absent_count++; break;
-                                        case 'late': $late_count++; break;
-                                    }
-                                }
-                                mysqli_stmt_close($stmt_insert);
-                            }
-                            mysqli_stmt_close($verify_stmt);
-                        }
-                        
-                        if ($marked_count > 0) {
-                            $message = "Attendance marked successfully for $marked_count students. Present: $present_count, Absent: $absent_count, Late: $late_count";
-                        } else {
-                            $error = "No valid students found to mark attendance. Please check the student-section assignments.";
-                        }
-                    }
-                    mysqli_stmt_close($stmt);
-                }
-                mysqli_stmt_close($stmt);
+                break;
             }
+            
+            // Additional date validation
+            if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $attendance_date)) {
+                $error = "Invalid date format. Expected format: YYYY-MM-DD";
+                break;
+            }
+            
+            if ($faculty_id <= 0) {
+                $error = "Faculty information not found. Please contact administrator.";
+                break;
+            }
+            
+            // Check if attendance already marked for this date and period
+            $check_stmt = mysqli_prepare($conn, "SELECT COUNT(*) as count FROM attendance WHERE subject_id = ? AND attendance_date = ? AND period_number = ?");
+            mysqli_stmt_bind_param($check_stmt, "isi", $subject_id, $attendance_date, $period_number);
+            mysqli_stmt_execute($check_stmt);
+            $check_result = mysqli_stmt_get_result($check_stmt);
+            $existing_count = mysqli_fetch_assoc($check_result)['count'];
+            mysqli_stmt_close($check_stmt);
+            
+            if ($existing_count > 0) {
+                $error = "Attendance already marked for this subject, date, and period!";
+                break;
+            }
+            
+            // Get attendance data from form
+            $attendance_data = isset($_POST['attendance']) ? $_POST['attendance'] : array();
+            $remarks_data = isset($_POST['remarks']) ? $_POST['remarks'] : array();
+            
+            if (empty($attendance_data)) {
+                $error = "No attendance data received. Please mark attendance for students and try again.";
+                break;
+            }
+            
+            // Begin transaction for data integrity
+            mysqli_autocommit($conn, FALSE);
+            
+            $marked_count = 0;
+            $present_count = 0;
+            $absent_count = 0;
+            $late_count = 0;
+            $success = true;
+            
+            try {
+                // Process each student's attendance
+                foreach ($attendance_data as $student_id => $status) {
+                    $student_id = (int)$student_id;
+                    $status = validateInput($status);
+                    $remarks = isset($remarks_data[$student_id]) ? validateInput($remarks_data[$student_id]) : '';
+                    
+                    // Validate status
+                    if (!in_array($status, ['present', 'absent', 'late'])) {
+                        continue; // Skip invalid status
+                    }
+                    
+                    // Verify student exists and belongs to the section
+                    $verify_stmt = mysqli_prepare($conn, "SELECT student_id FROM students WHERE student_id = ? AND section_id = ? AND student_status = 'active'");
+                    mysqli_stmt_bind_param($verify_stmt, "ii", $student_id, $section_id);
+                    mysqli_stmt_execute($verify_stmt);
+                    $verify_result = mysqli_stmt_get_result($verify_stmt);
+                    
+                    if (mysqli_num_rows($verify_result) > 0) {
+                        // Insert attendance record
+                        $insert_stmt = mysqli_prepare($conn, "INSERT INTO attendance (student_id, subject_id, faculty_id, attendance_date, period_number, status, remarks) VALUES (?, ?, ?, ?, ?, ?, ?)");
+                        mysqli_stmt_bind_param($insert_stmt, "iiiisss", $student_id, $subject_id, $faculty_id, $attendance_date, $period_number, $status, $remarks);
+                        
+                        if (mysqli_stmt_execute($insert_stmt)) {
+                            $marked_count++;
+                            switch($status) {
+                                case 'present': $present_count++; break;
+                                case 'absent': $absent_count++; break;
+                                case 'late': $late_count++; break;
+                            }
+                        } else {
+                            $success = false;
+                            $error = "Error inserting attendance for student ID $student_id: " . mysqli_error($conn);
+                            break;
+                        }
+                        mysqli_stmt_close($insert_stmt);
+                    } else {
+                        // Student not found or not in section
+                        $error = "Student ID $student_id not found in the selected section.";
+                        $success = false;
+                        break;
+                    }
+                    mysqli_stmt_close($verify_stmt);
+                }
+                
+                if ($success && $marked_count > 0) {
+                    // Commit transaction
+                    mysqli_commit($conn);
+                    $message = "Attendance marked successfully for $marked_count students. Present: $present_count, Absent: $absent_count, Late: $late_count";
+                } else if ($success && $marked_count == 0) {
+                    mysqli_rollback($conn);
+                    $error = "No valid students found to mark attendance.";
+                } else {
+                    // Rollback on error
+                    mysqli_rollback($conn);
+                    if (empty($error)) {
+                        $error = "Error occurred while marking attendance.";
+                    }
+                }
+                
+            } catch (Exception $e) {
+                mysqli_rollback($conn);
+                $error = "Database error: " . $e->getMessage();
+            }
+            
+            // Restore autocommit
+            mysqli_autocommit($conn, TRUE);
             break;
     }
 }
